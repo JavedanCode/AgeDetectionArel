@@ -32,11 +32,10 @@ class AFADDataset(Dataset):
         return img, label
 
 def main():
-    # extract age from filename (e.g., "27_0_1_2017....jpg.chip")
+    # Extract age from filename
     def extract_age(filename):
         return int(filename.split("_")[0])
-
-    # convert age to age-group class
+    # Map age to age group
     def age_to_group(age):
         if age <= 12:
             return 0
@@ -54,7 +53,7 @@ def main():
     image_dir = r"C:\Users\Soren\PycharmProjects\AgeDetectionArel\AFAD-Full"
 
     data = []
-
+    # Traverse directories and collect image paths and age groups
     for age_folder in os.listdir(image_dir):
         age_path = os.path.join(image_dir, age_folder)
 
@@ -78,31 +77,30 @@ def main():
                 if f.lower().endswith((".jpg", ".jpeg", ".png")):
                     rel_path = os.path.join(age_folder, inner_folder, f)
                     data.append([rel_path, group])
-
+    # Create DataFrame
     df = pd.DataFrame(data, columns=["filename", "age_group"])
     print("Total images:", len(df))
 
     print("Groups BEFORE remap:", sorted(df["age_group"].unique()))
     print(df["age_group"].value_counts())
-
-    # remap labels to 0..(num_classes-1)
+    # Remap age groups to consecutive integers starting from 0
     unique_labels = sorted(df["age_group"].unique())
     label_map = {old: new for new, old in enumerate(unique_labels)}
     df["age_group"] = df["age_group"].map(label_map).astype(int)
-
+    # Verify remapping
     print("Groups AFTER remap:", sorted(df["age_group"].unique()))
     print(df["age_group"].value_counts())
-
+    # Split dataset
     train_df, val_df = train_test_split(
         df,
         test_size=0.2,
         random_state=42,
         stratify=df["age_group"]
     )
-
+    # Reset indices
     train_df = train_df.reset_index(drop=True)
     val_df = val_df.reset_index(drop=True)
-
+    # Define transformations
     transform = transforms.Compose([
         transforms.Resize((160, 160)),
         transforms.RandomHorizontalFlip(),
@@ -120,47 +118,46 @@ def main():
         transforms.Normalize([0.485, 0.456, 0.406],
                              [0.229, 0.224, 0.225])
     ])
-
+    # Create Datasets
     train_ds = AFADDataset(train_df, image_dir, transform)
     val_ds = AFADDataset(val_df, image_dir, transform)
-
+    # Create DataLoaders
     train_loader = DataLoader(train_ds, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
-
+    # Define device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Training on:", device)
-
     num_classes = df["age_group"].nunique()
     print("Number of classes:", num_classes)
-
     # Load pretrained EfficientNet-B2
     weights = EfficientNet_B2_Weights.IMAGENET1K_V1
     model = efficientnet_b2(weights=weights)
-
     # Replace classifier
     in_features = model.classifier[1].in_features
-
+    # Define new classifier
     model.classifier = nn.Sequential(
+        # Dropout layer for regularization
         nn.Dropout(p=0.4),
         nn.Linear(in_features, num_classes)  # num_classes = 6
     )
-
+    # Move model to device with channels_last memory format
     model = model.to(device, memory_format=torch.channels_last)
-
+    # Define loss function
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-
+    # Define optimizer
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=1e-4,
-        weight_decay=1e-4  # L2 regularization
+        weight_decay=1e-4
     )
-
+    # Define GradScaler for mixed precision
     scaler = torch.amp.GradScaler("cuda")
-
+    # Check GPU availability
     print("GPU available:", torch.cuda.is_available())
     print("GPU name:", torch.cuda.get_device_name(0))
-
+    # Training epoch function
     def train_epoch():
+        # Set model to training mode
         model.train()
         correct, total, running_loss = 0, 0, 0
 
@@ -168,7 +165,7 @@ def main():
 
         for imgs, labels in loop:
             imgs, labels = imgs.to(device), labels.to(device)
-
+            # Mixed precision context for forward pass and loss computation
             with torch.amp.autocast("cuda"):
                 outputs = model(imgs)
                 loss = criterion(outputs, labels)
@@ -177,7 +174,7 @@ def main():
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
-
+            # Update metrics
             running_loss += loss.item() * imgs.size(0)
             _, preds = outputs.max(1)
             correct += (preds == labels).sum().item()
@@ -188,6 +185,7 @@ def main():
         return correct / total, running_loss / total
 
     def validate():
+        # Set model to evaluation mode
         model.eval()
         correct, total, running_loss = 0, 0, 0
 
@@ -197,10 +195,10 @@ def main():
             for imgs, labels in loop:
                 imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
 
-
+                # Mixed precision context for forward pass and loss computation
                 outputs = model(imgs)
                 loss = criterion(outputs, labels)
-
+                # Update metrics
                 running_loss += loss.item() * imgs.size(0)
                 _, preds = outputs.max(1)
                 correct += (preds == labels).sum().item()
@@ -210,6 +208,7 @@ def main():
 
         return correct / total, running_loss / total
 
+    # Training loop with early stopping
     model_path = "age_model_pt.pth"
 
     if not os.path.exists(model_path):
@@ -219,12 +218,15 @@ def main():
         patience = 3
         no_improve = 0
 
+        # Training for a maximum of 15 epochs
         for epoch in range(15):
+
             train_acc, train_loss = train_epoch()
             val_acc, val_loss = validate()
 
             print(f"Epoch {epoch + 1}/15 | Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}")
 
+            # Check for improvement and save the best model
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 torch.save(model.state_dict(), model_path)

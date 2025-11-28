@@ -3,9 +3,9 @@ import torch
 import torch.nn as nn
 from torchvision import transforms, models
 
-# ---------- CONFIG ----------
-MODEL_PATH = "age_model_pt.pth"   # your trained model
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Configuration for the demo
+MODEL_PATH = "age_model_pt.pth"   # The model we trained and saved earlier
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Use GPU if available, if not use CPU
 
 # Age group labels (match your age_to_group logic)
 ID_TO_LABEL = {
@@ -16,10 +16,9 @@ ID_TO_LABEL = {
     4: "45-59"
 }
 
-# ---------- MODEL DEFINITION ----------
+# load model function
 def load_model():
 
-    # === If you actually trained EfficientNet-B2 instead, use this instead: ===
     from torchvision.models import efficientnet_b2, EfficientNet_B2_Weights
     model = efficientnet_b2(weights=EfficientNet_B2_Weights.IMAGENET1K_V1)
     model.classifier[1] = nn.Linear(model.classifier[1].in_features, 5)
@@ -29,10 +28,9 @@ def load_model():
     model.to(DEVICE)
     return model
 
-# ---------- PREPROCESS ----------
-# NOTE: use the SAME normalization as in training (ImageNet stats)
+# Preprocessing transformations
 preprocess = transforms.Compose([
-    transforms.Resize((160, 160)),   # must match your train size
+    transforms.Resize((160, 160)),   # same size as training images
     transforms.ToTensor(),
     transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
@@ -40,22 +38,25 @@ preprocess = transforms.Compose([
     )
 ])
 
-# ---------- MAIN LOOP ----------
+# Main function to run webcam demo
 def main():
+    # Load model
     model = load_model()
     print("Model loaded. Running on:", DEVICE)
 
-    # OpenCV face detector (Haar Cascade)
+    # Initialize OpenCV's Haar Cascade for face detection
     face_cascade = cv2.CascadeClassifier(
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     )
 
+    # Start video capture from webcam
     cap = cv2.VideoCapture(0)  # webcam 0
 
     if not cap.isOpened():
         print("Could not open webcam.")
         return
 
+    # Main loop
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -64,7 +65,7 @@ def main():
         # Convert to grayscale for face detection
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Detect faces
+        # Detect faces in the frame
         faces = face_cascade.detectMultiScale(
             gray,
             scaleFactor=1.3,
@@ -72,6 +73,7 @@ def main():
             minSize=(60, 60)
         )
 
+        # Process each detected face
         for (x, y, w, h) in faces:
             # crop face
             face_img = frame[y:y+h, x:x+w]
@@ -81,7 +83,7 @@ def main():
 
             # preprocess
             face_pil = cv2.cvtColor(face_rgb, cv2.COLOR_RGB2BGR)  # OpenCV uses BGR
-            # easier: convert numpy to PIL via cv2 to PIL:
+            # Convert to PIL Image
             from PIL import Image
             face_pil = Image.fromarray(face_rgb)
 
@@ -107,15 +109,15 @@ def main():
                 (0, 255, 0),
                 2
             )
-
+        # show frame
         cv2.imshow("Age Detection (press q to quit)", frame)
 
-        # quit with 'q'
+        # we can quit by pressing 'q', The program won't close until 'q' is pressed or terminated manually from IDE
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cap.release()
-    cv2.destroyAllWindows()
+    cv2.destroyAllWindows() # close all OpenCV windows
 
 
 if __name__ == "__main__":
