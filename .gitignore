@@ -1,0 +1,8 @@
+.venv/
+.idea/
+
+AFAD-FULL/
+
+__pycache__/
+*/__pycache__/
+**/__pycache__/
