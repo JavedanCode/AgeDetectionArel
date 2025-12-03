@@ -46,7 +46,7 @@ def main():
         else:
             return 4  # 50+
 
-    image_dir = r"C:\Users\Soren\PycharmProjects\AgeDetectionArel\AFAD-Full"
+    image_dir = r"D:\Pycharm\PycharmProjects\AgeDetectionArel\AFAD-Full"
 
     data = []
     # Traverse directories and collect image paths and age groups
