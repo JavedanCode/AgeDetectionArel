@@ -82,7 +82,7 @@ def main():
             face_rgb = cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB)
 
             # preprocess
-            #face_pil = cv2.cvtColor(face_rgb, cv2.COLOR_RGB2BGR)  # OpenCV uses BGR
+            # face_pil = cv2.cvtColor(face_rgb, cv2.COLOR_RGB2BGR)  # OpenCV uses BGR
             # Convert to PIL Image
             from PIL import Image
             face_pil = Image.fromarray(face_rgb)

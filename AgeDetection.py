@@ -2,12 +2,13 @@ import os
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms, models
+from torchvision import transforms
+from torchvision.models import efficientnet_b2, EfficientNet_B2_Weights
 from PIL import Image
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
-from torchvision.models import efficientnet_b2, EfficientNet_B2_Weights
+
 
 class AFADDataset(Dataset):
     def __init__(self, df, img_dir, transform=None):
@@ -21,7 +22,7 @@ class AFADDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         img_path = os.path.join(self.img_dir, row["filename"])
-        label = int(row["age_group"])
+        label = torch.tensor(int(row["age_group"]), dtype=torch.long)
 
         img = Image.open(img_path).convert("RGB")
 
@@ -31,23 +32,19 @@ class AFADDataset(Dataset):
         return img, label
 
 def main():
-    # Extract age from filename
-    def extract_age(filename):
-        return int(filename.split("_")[0])
+
     # Map age to age group
     def age_to_group(age):
-        if age <= 12:
-            return 0
-        elif age <= 19:
-            return 1
-        elif age <= 29:
-            return 2
-        elif age <= 44:
-            return 3
-        elif age <= 59:
-            return 4
+        if age < 20:
+            return 0  # 15–19
+        elif age < 30:
+            return 1  # 20–29
+        elif age < 40:
+            return 2  # 30–39
+        elif age < 50:
+            return 3  # 40–49
         else:
-            return 5
+            return 4  # 50+
 
     image_dir = r"C:\Users\Soren\PycharmProjects\AgeDetectionArel\AFAD-Full"
 
@@ -89,18 +86,26 @@ def main():
     # Verify remapping
     print("Groups AFTER remap:", sorted(df["age_group"].unique()))
     print(df["age_group"].value_counts())
+
+    counts = df["age_group"].value_counts()
+    if (counts < 2).any():
+        stratify_val = None
+        print("Warning: some classes have < 2 samples — disabling stratify for train_test_split.")
+    else:
+        stratify_val = df["age_group"]
+
     # Split dataset
     train_df, val_df = train_test_split(
         df,
         test_size=0.2,
         random_state=42,
-        stratify=df["age_group"]
+        stratify=stratify_val
     )
     # Reset indices
     train_df = train_df.reset_index(drop=True)
     val_df = val_df.reset_index(drop=True)
     # Define transformations
-    transform = transforms.Compose([
+    train_transform = transforms.Compose([
         transforms.Resize((160, 160)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(10),
@@ -117,30 +122,40 @@ def main():
         transforms.Normalize([0.485, 0.456, 0.406],
                              [0.229, 0.224, 0.225])
     ])
+
+    val_transform = transforms.Compose([
+        transforms.Resize((160, 160)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406],
+                             [0.229, 0.224, 0.225])
+    ])
     # Create Datasets
-    train_ds = AFADDataset(train_df, image_dir, transform)
-    val_ds = AFADDataset(val_df, image_dir, transform)
+    train_ds = AFADDataset(train_df, image_dir, train_transform)
+    val_ds = AFADDataset(val_df, image_dir, val_transform)
     # Create DataLoaders
     train_loader = DataLoader(train_ds, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=64, shuffle=False, num_workers=4, pin_memory=True)
     # Define device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Training on:", device)
+
     num_classes = df["age_group"].nunique()
     print("Number of classes:", num_classes)
     # Load pretrained EfficientNet-B2
     weights = EfficientNet_B2_Weights.IMAGENET1K_V1
     model = efficientnet_b2(weights=weights)
-    # Replace classifier
+
     in_features = model.classifier[1].in_features
-    # Define new classifier
     model.classifier = nn.Sequential(
         # Dropout layer for regularization
         nn.Dropout(p=0.4),
         nn.Linear(in_features, num_classes)  # num_classes = 6
     )
-    # Move model to device with channels_last memory format
-    model = model.to(device, memory_format=torch.channels_last)
+
+    if device.type == "cuda":
+        model = model.to(device, memory_format=torch.channels_last)
+    else:
+        model = model.to(device)
     # Define loss function
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     # Define optimizer
@@ -150,29 +165,33 @@ def main():
         weight_decay=1e-4
     )
     # Define GradScaler for mixed precision
-    scaler = torch.amp.GradScaler("cuda")
+    scaler = torch.cuda.amp.GradScaler()
     # Check GPU availability
     print("GPU available:", torch.cuda.is_available())
-    print("GPU name:", torch.cuda.get_device_name(0))
+    if torch.cuda.is_available():
+        print("GPU name:", torch.cuda.get_device_name(0))
     # Training epoch function
     def train_epoch():
         # Set model to training mode
         model.train()
         correct, total, running_loss = 0, 0, 0
-
         loop = tqdm(train_loader, desc="Training", leave=True)
 
         for imgs, labels in loop:
-            imgs, labels = imgs.to(device), labels.to(device)
+            imgs = imgs.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+
+            optimizer.zero_grad()
+
             # Mixed precision context for forward pass and loss computation
-            with torch.amp.autocast("cuda"):
+            with torch.cuda.amp.autocast():
                 outputs = model(imgs)
                 loss = criterion(outputs, labels)
+
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
-            optimizer.zero_grad()
             # Update metrics
             running_loss += loss.item() * imgs.size(0)
             _, preds = outputs.max(1)
@@ -194,9 +213,11 @@ def main():
             for imgs, labels in loop:
                 imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
 
-                # Mixed precision context for forward pass and loss computation
-                outputs = model(imgs)
-                loss = criterion(outputs, labels)
+                # Use autocast for validation too
+                with torch.cuda.amp.autocast():
+                    outputs = model(imgs)
+                    loss = criterion(outputs, labels)
+
                 # Update metrics
                 running_loss += loss.item() * imgs.size(0)
                 _, preds = outputs.max(1)
@@ -246,7 +267,10 @@ def main():
         print(f"Loaded model validation accuracy: {val_acc:.4f}")
 
 if __name__ == "__main__":
-    torch.multiprocessing.set_start_method("spawn")
+    try:
+        torch.multiprocessing.set_start_method("spawn")
+    except RuntimeError:
+        pass
     main()
 
 
