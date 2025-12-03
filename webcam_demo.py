@@ -9,10 +9,10 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu") # Use GPU 
 
 # Age group labels (match your age_to_group logic)
 ID_TO_LABEL = {
-    0: "15–19",
-    1: "20–29",
-    2: "30–39",
-    3: "40–49",
+    0: "15-19",
+    1: "20-29",
+    2: "30-39",
+    3: "40-49",
     4: "50+"
 }
 
