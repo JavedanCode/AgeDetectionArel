@@ -77,15 +77,11 @@ def main():
     df = pd.DataFrame(data, columns=["filename", "age_group"])
     print("Total images:", len(df))
 
-    print("Groups BEFORE remap:", sorted(df["age_group"].unique()))
-    print(df["age_group"].value_counts())
     # Remap age groups to consecutive integers starting from 0
     unique_labels = sorted(df["age_group"].unique())
     label_map = {old: new for new, old in enumerate(unique_labels)}
     df["age_group"] = df["age_group"].map(label_map).astype(int)
-    # Verify remapping
-    print("Groups AFTER remap:", sorted(df["age_group"].unique()))
-    print(df["age_group"].value_counts())
+
 
     counts = df["age_group"].value_counts()
     if (counts < 2).any():
@@ -149,7 +145,7 @@ def main():
     model.classifier = nn.Sequential(
         # Dropout layer for regularization
         nn.Dropout(p=0.4),
-        nn.Linear(in_features, num_classes)  # num_classes = 6
+        nn.Linear(in_features, num_classes)  # num_classes = 5
     )
 
     if device.type == "cuda":
@@ -164,15 +160,17 @@ def main():
         lr=1e-4,
         weight_decay=1e-4
     )
-    # Define GradScaler for mixed precision
-    scaler = torch.cuda.amp.GradScaler()
+
+    use_amp = torch.cuda.is_available()
+    scaler = torch.amp.GradScaler(device="cuda") if use_amp else None
+
     # Check GPU availability
-    print("GPU available:", torch.cuda.is_available())
-    if torch.cuda.is_available():
-        print("GPU name:", torch.cuda.get_device_name(0))
+    # print("GPU available:", torch.cuda.is_available())
+    # if torch.cuda.is_available():
+    #     print("GPU name:", torch.cuda.get_device_name(0))
+
     # Training epoch function
     def train_epoch():
-        # Set model to training mode
         model.train()
         correct, total, running_loss = 0, 0, 0
         loop = tqdm(train_loader, desc="Training", leave=True)
@@ -183,16 +181,18 @@ def main():
 
             optimizer.zero_grad()
 
-            # Mixed precision context for forward pass and loss computation
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast('cuda', enabled=use_amp):
                 outputs = model(imgs)
                 loss = criterion(outputs, labels)
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            if use_amp:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
 
-            # Update metrics
             running_loss += loss.item() * imgs.size(0)
             _, preds = outputs.max(1)
             correct += (preds == labels).sum().item()
@@ -203,22 +203,19 @@ def main():
         return correct / total, running_loss / total
 
     def validate():
-        # Set model to evaluation mode
         model.eval()
         correct, total, running_loss = 0, 0, 0
-
         loop = tqdm(val_loader, desc="Validating", leave=True)
 
         with torch.no_grad():
             for imgs, labels in loop:
-                imgs, labels = imgs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
+                imgs = imgs.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
 
-                # Use autocast for validation too
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda', enabled=use_amp):
                     outputs = model(imgs)
                     loss = criterion(outputs, labels)
 
-                # Update metrics
                 running_loss += loss.item() * imgs.size(0)
                 _, preds = outputs.max(1)
                 correct += (preds == labels).sum().item()
