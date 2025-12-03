@@ -9,7 +9,6 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 from torchvision.models import efficientnet_b2, EfficientNet_B2_Weights
 
-
 class AFADDataset(Dataset):
     def __init__(self, df, img_dir, transform=None):
         self.df = df
@@ -169,10 +168,10 @@ def main():
             with torch.amp.autocast("cuda"):
                 outputs = model(imgs)
                 loss = criterion(outputs, labels)
-
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+
             optimizer.zero_grad()
             # Update metrics
             running_loss += loss.item() * imgs.size(0)
